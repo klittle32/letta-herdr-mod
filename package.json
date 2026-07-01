@@ -1,0 +1,25 @@
+{
+  "name": "letta-herdr-mod",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Letta Code mod that reports semantic agent state to Herdr.",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build src/index.ts --target=node --format=esm --outfile=dist/letta-herdr-mod.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "bun-types": "^1.3.14",
+    "typescript": "latest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/klittle32/letta-herdr-mod.git"
+  },
+  "bugs": {
+    "url": "https://github.com/klittle32/letta-herdr-mod/issues"
+  },
+  "homepage": "https://github.com/klittle32/letta-herdr-mod#readme"
+}

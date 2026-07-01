@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.firecrawl/
+*.transcript.txt
+.DS_Store
+.letta/
