@@ -8,8 +8,16 @@ export type HerdrReporterClient = {
 export type StateReporterOptions = {
   now?: (() => number) | undefined;
   idleDelayMs?: number | undefined;
+  staleWorkingMs?: number | undefined;
+  postToolIdleMs?: number | undefined;
+  toolWatchdogMs?: number | undefined;
   reportApprovalBlocked?: boolean | undefined;
 };
+
+export const DEFAULT_IDLE_DELAY_MS = 250;
+export const DEFAULT_STALE_WORKING_MS = 300_000;
+export const DEFAULT_POST_TOOL_IDLE_MS = 0;
+export const DEFAULT_TOOL_WATCHDOG_MS = 0;
 
 export type ConversationEvent = {
   conversationId?: string | null | undefined;
@@ -36,14 +44,22 @@ export type ReporterSnapshot = {
   lastSeq: number | null;
   lastError: string | null;
   lastResultOk: boolean | null;
+  staleWorkingMs: number;
+  postToolIdleMs: number;
+  toolWatchdogMs: number;
 };
 
 export class HerdrStateReporter {
   private readonly now: () => number;
   private readonly idleDelayMs: number;
+  private readonly staleWorkingMs: number;
+  private readonly postToolIdleMs: number;
+  private readonly toolWatchdogMs: number;
   private readonly reportApprovalBlocked: boolean;
   private seqCounter = 0;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
+  private staleWorkingTimer: ReturnType<typeof setTimeout> | undefined;
+  private toolWatchdogTimer: ReturnType<typeof setTimeout> | undefined;
   private lastKey: string | undefined;
   private lastConversationId: string | null = null;
   private lastState: HerdrAgentState | null = null;
@@ -57,7 +73,10 @@ export class HerdrStateReporter {
     options: StateReporterOptions = {},
   ) {
     this.now = options.now ?? (() => Date.now());
-    this.idleDelayMs = options.idleDelayMs ?? 150;
+    this.idleDelayMs = options.idleDelayMs ?? DEFAULT_IDLE_DELAY_MS;
+    this.staleWorkingMs = options.staleWorkingMs ?? DEFAULT_STALE_WORKING_MS;
+    this.postToolIdleMs = options.postToolIdleMs ?? DEFAULT_POST_TOOL_IDLE_MS;
+    this.toolWatchdogMs = options.toolWatchdogMs ?? DEFAULT_TOOL_WATCHDOG_MS;
     this.reportApprovalBlocked = options.reportApprovalBlocked ?? false;
   }
 
@@ -66,11 +85,16 @@ export class HerdrStateReporter {
   }
 
   async onTurnStart(event: ConversationEvent): Promise<void> {
-    await this.report("working", "turn", event.conversationId ?? undefined);
+    await this.reportWorking("turn", event.conversationId ?? undefined);
+  }
+
+  onTurnEnd(event: ConversationEvent): void {
+    this.cancelFallbackTimers();
+    this.scheduleIdle(event.conversationId ?? undefined);
   }
 
   async onLlmStart(event: ConversationEvent): Promise<void> {
-    await this.report("working", "thinking", event.conversationId ?? undefined);
+    await this.reportWorking("thinking", event.conversationId ?? undefined);
   }
 
   async onLlmEnd(event: LlmEndEvent): Promise<void> {
@@ -80,19 +104,34 @@ export class HerdrStateReporter {
     }
 
     const stopReason = String(event.stopReason ?? "").toLowerCase();
-    if (stopReason.includes("tool")) {
+    if (isIntermediateLlmStop(stopReason)) {
+      this.scheduleStaleWorking(event.conversationId ?? undefined);
       return;
     }
 
+    this.cancelFallbackTimers();
     this.scheduleIdle(event.conversationId ?? undefined);
   }
 
   async onToolStart(event: ToolStartEvent): Promise<void> {
+    // Tool events are status detail within a turn. The durable lifecycle
+    // boundary is turn_start/turn_end, mirroring Herdr's built-in integrations
+    // that track agent/session start and end rather than individual tools.
+    this.cancelStaleWorking();
+    this.cancelToolWatchdog();
     await this.report("working", `tool:${event.toolName}`, event.conversationId ?? undefined);
+    this.scheduleToolWatchdog(event.conversationId ?? undefined);
   }
 
-  onToolEnd(event: ConversationEvent): void {
-    this.scheduleIdle(event.conversationId ?? undefined);
+  async onToolEnd(event: ConversationEvent): Promise<void> {
+    // After a tool returns, Letta usually hands the result back to the model to
+    // decide whether to call another tool or answer. Semantically that is still
+    // working; do not flicker to idle between tool calls. turn_end is the
+    // primary completion event; postToolIdleMs is an opt-in fallback for hosts
+    // that lack turn_end.
+    this.cancelToolWatchdog();
+    await this.report("working", "thinking", event.conversationId ?? undefined);
+    this.scheduleIdle(event.conversationId ?? undefined, this.postToolIdleMs);
   }
 
   async onPermissionCheck(event: PermissionCheckEvent): Promise<void> {
@@ -107,6 +146,9 @@ export class HerdrStateReporter {
     conversationId?: string | null | undefined,
   ): Promise<HerdrResult | undefined> {
     this.cancelIdle();
+    if (state !== "working") {
+      this.cancelFallbackTimers();
+    }
     const normalizedConversationId = conversationId ?? this.lastConversationId ?? undefined;
     const key = JSON.stringify([state, customStatus ?? null, normalizedConversationId ?? null]);
     if (key === this.lastKey) {
@@ -134,6 +176,7 @@ export class HerdrStateReporter {
 
   async release(conversationId?: string | null | undefined): Promise<HerdrResult> {
     this.cancelIdle();
+    this.cancelFallbackTimers();
     const normalizedConversationId = conversationId ?? this.lastConversationId ?? undefined;
     const result = await this.client.releaseAgent({
       seq: this.nextSeq(),
@@ -153,16 +196,47 @@ export class HerdrStateReporter {
       lastSeq: this.lastSeq,
       lastError: this.lastError,
       lastResultOk: this.lastResultOk,
+      staleWorkingMs: this.staleWorkingMs,
+      postToolIdleMs: this.postToolIdleMs,
+      toolWatchdogMs: this.toolWatchdogMs,
     };
   }
 
-  private scheduleIdle(conversationId?: string | null | undefined): void {
+  private async reportWorking(customStatus: string, conversationId?: string | null | undefined): Promise<void> {
+    await this.report("working", customStatus, conversationId);
+    this.scheduleStaleWorking(conversationId);
+  }
+
+  private scheduleIdle(conversationId?: string | null | undefined, delayMs = this.idleDelayMs): void {
     this.cancelIdle();
+    if (delayMs <= 0) return;
     const normalizedConversationId = conversationId ?? this.lastConversationId ?? undefined;
     this.idleTimer = setTimeout(() => {
       this.idleTimer = undefined;
       void this.report("idle", "ready", normalizedConversationId);
-    }, this.idleDelayMs);
+    }, delayMs);
+  }
+
+  private scheduleStaleWorking(conversationId?: string | null | undefined): void {
+    this.cancelStaleWorking();
+    if (this.staleWorkingMs <= 0) return;
+
+    const normalizedConversationId = conversationId ?? this.lastConversationId ?? undefined;
+    this.staleWorkingTimer = setTimeout(() => {
+      this.staleWorkingTimer = undefined;
+      void this.report("idle", "ready", normalizedConversationId);
+    }, this.staleWorkingMs);
+  }
+
+  private scheduleToolWatchdog(conversationId?: string | null | undefined): void {
+    this.cancelToolWatchdog();
+    if (this.toolWatchdogMs <= 0) return;
+
+    const normalizedConversationId = conversationId ?? this.lastConversationId ?? undefined;
+    this.toolWatchdogTimer = setTimeout(() => {
+      this.toolWatchdogTimer = undefined;
+      void this.report("idle", "ready", normalizedConversationId);
+    }, this.toolWatchdogMs);
   }
 
   private cancelIdle(): void {
@@ -170,6 +244,25 @@ export class HerdrStateReporter {
       clearTimeout(this.idleTimer);
       this.idleTimer = undefined;
     }
+  }
+
+  private cancelStaleWorking(): void {
+    if (this.staleWorkingTimer) {
+      clearTimeout(this.staleWorkingTimer);
+      this.staleWorkingTimer = undefined;
+    }
+  }
+
+  private cancelToolWatchdog(): void {
+    if (this.toolWatchdogTimer) {
+      clearTimeout(this.toolWatchdogTimer);
+      this.toolWatchdogTimer = undefined;
+    }
+  }
+
+  private cancelFallbackTimers(): void {
+    this.cancelStaleWorking();
+    this.cancelToolWatchdog();
   }
 
   private nextSeq(): number {
@@ -181,4 +274,8 @@ export class HerdrStateReporter {
     this.lastResultOk = result.ok;
     this.lastError = result.ok ? null : result.error ?? result.reason ?? "Herdr report failed";
   }
+}
+
+function isIntermediateLlmStop(stopReason: string): boolean {
+  return stopReason.includes("tool") || stopReason.includes("approval");
 }

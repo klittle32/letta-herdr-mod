@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import activate, { createReporterFromEnv, parseIdleDelayMs, shouldReportApprovalBlocked } from "../src/index";
+import activate, {
+  createReporterFromEnv,
+  parseIdleDelayMs,
+  parsePostToolIdleMs,
+  parseStaleWorkingMs,
+  parseToolWatchdogMs,
+  shouldReportApprovalBlocked,
+} from "../src/index";
 
 type Handler = (...args: any[]) => unknown;
 
@@ -11,7 +18,7 @@ function createFakeLetta() {
 
   const letta = {
     capabilities: {
-      events: { lifecycle: true, tools: true, llm: true },
+      events: { lifecycle: true, turns: true, tools: true, llm: true },
       commands: true,
       permissions: true,
     },
@@ -46,10 +53,34 @@ function createFakeLetta() {
 
 describe("mod config helpers", () => {
   test("parses idle delay safely", () => {
-    expect(parseIdleDelayMs(undefined)).toBe(150);
+    expect(parseIdleDelayMs(undefined)).toBe(250);
     expect(parseIdleDelayMs("25")).toBe(25);
-    expect(parseIdleDelayMs("0")).toBe(150);
-    expect(parseIdleDelayMs("abc")).toBe(150);
+    expect(parseIdleDelayMs("0")).toBe(250);
+    expect(parseIdleDelayMs("25ms")).toBe(250);
+    expect(parseIdleDelayMs("abc")).toBe(250);
+  });
+
+  test("parses stale working fallback safely", () => {
+    expect(parseStaleWorkingMs(undefined)).toBe(300_000);
+    expect(parseStaleWorkingMs("5000")).toBe(5_000);
+    expect(parseStaleWorkingMs("0")).toBe(0);
+    expect(parseStaleWorkingMs("-1")).toBe(300_000);
+    expect(parseStaleWorkingMs("abc")).toBe(300_000);
+  });
+
+  test("parses post-tool idle fallback safely", () => {
+    expect(parsePostToolIdleMs(undefined)).toBe(0);
+    expect(parsePostToolIdleMs("2500")).toBe(2_500);
+    expect(parsePostToolIdleMs("0")).toBe(0);
+    expect(parsePostToolIdleMs("2.5")).toBe(0);
+    expect(parsePostToolIdleMs("abc")).toBe(0);
+  });
+
+  test("parses tool watchdog safely", () => {
+    expect(parseToolWatchdogMs(undefined)).toBe(0);
+    expect(parseToolWatchdogMs("30000")).toBe(30_000);
+    expect(parseToolWatchdogMs("0")).toBe(0);
+    expect(parseToolWatchdogMs("abc")).toBe(0);
   });
 
   test("parses approval blocked flag", () => {
@@ -78,6 +109,7 @@ describe("activate", () => {
     expect(fake.handlers.has("conversation_open")).toBe(true);
     expect(fake.handlers.has("conversation_close")).toBe(true);
     expect(fake.handlers.has("turn_start")).toBe(true);
+    expect(fake.handlers.has("turn_end")).toBe(true);
     expect(fake.handlers.has("tool_start")).toBe(true);
     expect(fake.handlers.has("tool_end")).toBe(true);
     expect(fake.handlers.has("llm_start")).toBe(true);
@@ -89,6 +121,19 @@ describe("activate", () => {
     expect(fake.handlers.size).toBe(0);
     expect(fake.commands.size).toBe(0);
     expect(fake.permissions).toHaveLength(0);
+  });
+
+  test("turn handlers require the turns event capability", () => {
+    const fake = createFakeLetta();
+    fake.letta.capabilities.events.turns = false;
+
+    const dispose = activate(fake.letta as any);
+
+    expect(fake.handlers.has("conversation_open")).toBe(true);
+    expect(fake.handlers.has("turn_start")).toBe(false);
+    expect(fake.handlers.has("turn_end")).toBe(false);
+
+    dispose?.();
   });
 
   test("/herdr-status explains disabled state", () => {

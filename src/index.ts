@@ -1,5 +1,12 @@
 import { HerdrClient, resolveHerdrEnv, type ResolvedHerdrEnv } from "./herdr-client";
-import { HerdrStateReporter, type HerdrReporterClient } from "./state-reporter";
+import {
+  DEFAULT_IDLE_DELAY_MS,
+  DEFAULT_POST_TOOL_IDLE_MS,
+  DEFAULT_STALE_WORKING_MS,
+  DEFAULT_TOOL_WATCHDOG_MS,
+  HerdrStateReporter,
+  type HerdrReporterClient,
+} from "./state-reporter";
 
 type Dispose = () => void;
 
@@ -7,6 +14,7 @@ type LettaModApi = {
   capabilities?: {
     events?: {
       lifecycle?: boolean;
+      turns?: boolean;
       tools?: boolean;
       llm?: boolean;
     };
@@ -55,8 +63,16 @@ export default function activate(letta: LettaModApi): Dispose | undefined {
       letta.events.on("conversation_close", (event) => {
         void reporter?.release(event?.conversationId);
       }),
+    );
+  }
+
+  if (letta.capabilities?.events?.turns && letta.events) {
+    disposers.push(
       letta.events.on("turn_start", (event) => {
         void reporter?.onTurnStart({ conversationId: event?.conversationId });
+      }),
+      letta.events.on("turn_end", (event) => {
+        reporter?.onTurnEnd({ conversationId: event?.conversationId });
       }),
     );
   }
@@ -70,7 +86,7 @@ export default function activate(letta: LettaModApi): Dispose | undefined {
         });
       }),
       letta.events.on("tool_end", (event) => {
-        reporter?.onToolEnd({ conversationId: event?.conversationId });
+        void reporter?.onToolEnd({ conversationId: event?.conversationId });
       }),
     );
   }
@@ -142,6 +158,9 @@ export function createReporterFromEnv(env: NodeJS.ProcessEnv | Record<string, st
   });
   const reporter = new HerdrStateReporter(client, {
     idleDelayMs: parseIdleDelayMs(env.LETTA_HERDR_IDLE_DELAY_MS),
+    staleWorkingMs: parseStaleWorkingMs(env.LETTA_HERDR_STALE_WORKING_MS),
+    postToolIdleMs: parsePostToolIdleMs(env.LETTA_HERDR_POST_TOOL_IDLE_MS),
+    toolWatchdogMs: parseToolWatchdogMs(env.LETTA_HERDR_TOOL_WATCHDOG_MS),
     reportApprovalBlocked: shouldReportApprovalBlocked(env),
   });
 
@@ -149,9 +168,19 @@ export function createReporterFromEnv(env: NodeJS.ProcessEnv | Record<string, st
 }
 
 export function parseIdleDelayMs(value: string | undefined): number {
-  if (!value) return 150;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 150;
+  return parseDurationMs(value, DEFAULT_IDLE_DELAY_MS, { allowZero: false });
+}
+
+export function parseStaleWorkingMs(value: string | undefined): number {
+  return parseDurationMs(value, DEFAULT_STALE_WORKING_MS, { allowZero: true });
+}
+
+export function parsePostToolIdleMs(value: string | undefined): number {
+  return parseDurationMs(value, DEFAULT_POST_TOOL_IDLE_MS, { allowZero: true });
+}
+
+export function parseToolWatchdogMs(value: string | undefined): number {
+  return parseDurationMs(value, DEFAULT_TOOL_WATCHDOG_MS, { allowZero: true });
 }
 
 export function shouldReportApprovalBlocked(env: NodeJS.ProcessEnv | Record<string, string | undefined>): boolean {
@@ -176,8 +205,25 @@ function formatStatus(bundle: ReporterBundle | undefined): string {
     `last conversation: ${snapshot?.lastConversationId ?? "none"}`,
     `last seq: ${snapshot?.lastSeq ?? "none"}`,
     `last result: ${snapshot?.lastResultOk == null ? "none" : snapshot.lastResultOk ? "ok" : "error"}`,
+    `stale working fallback: ${snapshot?.staleWorkingMs ?? "unknown"}ms`,
+    `post-tool idle fallback: ${snapshot?.postToolIdleMs ?? "unknown"}ms`,
+    `tool watchdog: ${snapshot?.toolWatchdogMs ?? "unknown"}ms`,
     snapshot?.lastError ? `last error: ${snapshot.lastError}` : undefined,
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function parseDurationMs(
+  value: string | undefined,
+  defaultValue: number,
+  options: { allowZero: boolean },
+): number {
+  if (value == null || value.trim() === "") return defaultValue;
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return defaultValue;
+  if (parsed < 0) return defaultValue;
+  if (!options.allowZero && parsed === 0) return defaultValue;
+  return parsed;
 }
