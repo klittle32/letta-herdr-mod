@@ -91,13 +91,14 @@ describe("mod config helpers", () => {
 
   test("creates reporter only inside Herdr", () => {
     expect(createReporterFromEnv({}).reporter).toBeUndefined();
-    expect(
-      createReporterFromEnv({
-        HERDR_ENV: "1",
-        HERDR_SOCKET_PATH: "/tmp/herdr.sock",
-        HERDR_PANE_ID: "w1:p1",
-      }).reporter,
-    ).toBeDefined();
+    const bundle = createReporterFromEnv({
+      HERDR_ENV: "1",
+      HERDR_SOCKET_PATH: "/tmp/herdr.sock",
+      HERDR_PANE_ID: "w1:p1",
+      AGENT_NAME: "Johnny5",
+    });
+    expect(bundle.reporter).toBeDefined();
+    expect((bundle.client as any).displayAgent).toBe("Johnny5");
   });
 });
 
@@ -115,6 +116,7 @@ describe("activate", () => {
     expect(fake.handlers.has("llm_start")).toBe(true);
     expect(fake.handlers.has("llm_end")).toBe(true);
     expect(fake.commands.has("herdr-status")).toBe(true);
+    expect(fake.commands.has("herdr-repair")).toBe(true);
     expect(fake.permissions).toHaveLength(1);
 
     dispose?.();

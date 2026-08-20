@@ -133,6 +133,24 @@ export default function activate(letta: LettaModApi): Dispose | undefined {
           return { type: "output", output: formatStatus(activeBundle) };
         },
       }),
+      letta.commands.register({
+        id: "herdr-repair",
+        description: "Clear this mod's stale Herdr lifecycle authority and display metadata.",
+        showInTranscript: false,
+        async run() {
+          const result = await activeBundle?.reporter?.clearAuthority();
+          if (!activeBundle?.env.enabled) {
+            return { type: "output", output: formatStatus(activeBundle) };
+          }
+          if (!result) {
+            return { type: "output", output: "letta-herdr-mod: no active reporter" };
+          }
+          return {
+            type: "output",
+            output: result.ok ? "letta-herdr-mod: cleared Herdr authority" : `letta-herdr-mod: repair failed\n${formatStatus(activeBundle)}`,
+          };
+        },
+      }),
     );
   }
 
@@ -155,6 +173,7 @@ export function createReporterFromEnv(env: NodeJS.ProcessEnv | Record<string, st
     env: resolvedEnv,
     source: env.LETTA_HERDR_SOURCE,
     agent: env.LETTA_HERDR_AGENT,
+    displayAgent: env.LETTA_HERDR_DISPLAY_AGENT ?? env.AGENT_NAME,
   });
   const reporter = new HerdrStateReporter(client, {
     idleDelayMs: parseIdleDelayMs(env.LETTA_HERDR_IDLE_DELAY_MS),

@@ -1,7 +1,16 @@
-import type { HerdrAgentState, HerdrResult, ReleaseAgentInput, ReportAgentInput } from "./herdr-client";
+import type {
+  HerdrAgentState,
+  HerdrResult,
+  ClearAgentAuthorityInput,
+  ReleaseAgentInput,
+  ReportAgentInput,
+  ReportMetadataInput,
+} from "./herdr-client";
 
 export type HerdrReporterClient = {
   reportAgent(input: ReportAgentInput): Promise<HerdrResult>;
+  reportMetadata(input: ReportMetadataInput): Promise<HerdrResult>;
+  clearAgentAuthority(input: ClearAgentAuthorityInput): Promise<HerdrResult>;
   releaseAgent(input: ReleaseAgentInput): Promise<HerdrResult>;
 };
 
@@ -99,7 +108,7 @@ export class HerdrStateReporter {
 
   async onLlmEnd(event: LlmEndEvent): Promise<void> {
     if (event.error) {
-      await this.report("blocked", "llm error", event.conversationId ?? undefined);
+      await this.report("blocked", "llm error", event.conversationId ?? undefined, formatLlmErrorMessage(event.error));
       return;
     }
 
@@ -137,13 +146,14 @@ export class HerdrStateReporter {
   async onPermissionCheck(event: PermissionCheckEvent): Promise<void> {
     if (!this.reportApprovalBlocked) return;
     if (event.phase !== "approval") return;
-    await this.report("blocked", "approval", event.conversationId ?? undefined);
+    await this.report("blocked", "approval", event.conversationId ?? undefined, "Approval required");
   }
 
   async report(
     state: HerdrAgentState,
     customStatus?: string | undefined,
     conversationId?: string | null | undefined,
+    message?: string | undefined,
   ): Promise<HerdrResult | undefined> {
     this.cancelIdle();
     if (state !== "working") {
@@ -159,12 +169,23 @@ export class HerdrStateReporter {
     const result = await this.client.reportAgent({
       state,
       customStatus,
+      message,
       seq,
       agentSessionId: normalizedConversationId,
     });
 
-    this.recordResult(result);
-    if (result.ok || result.skipped) {
+    const metadataResult = customStatus
+      ? await this.client.reportMetadata({
+          customStatus,
+          stateLabels: { [state]: customStatus },
+          seq,
+        })
+      : undefined;
+
+    const reportAccepted = result.ok || result.skipped;
+    const metadataAccepted = metadataResult == null || metadataResult.ok || metadataResult.skipped;
+    this.recordResult(reportAccepted ? (metadataResult ?? result) : result);
+    if (reportAccepted && metadataAccepted) {
       this.lastKey = key;
       this.lastConversationId = normalizedConversationId ?? null;
       this.lastState = state;
@@ -178,11 +199,34 @@ export class HerdrStateReporter {
     this.cancelIdle();
     this.cancelFallbackTimers();
     const normalizedConversationId = conversationId ?? this.lastConversationId ?? undefined;
+    const seq = this.nextSeq();
+    const metadataResult = await this.client.reportMetadata({
+      clearSummary: true,
+      clearStateLabels: true,
+      clearDisplayAgent: true,
+      seq,
+    });
     const result = await this.client.releaseAgent({
-      seq: this.nextSeq(),
+      seq,
       agentSessionId: normalizedConversationId,
     });
-    this.recordResult(result);
+    this.recordResult(result.ok ? metadataResult : result);
+    this.lastKey = undefined;
+    return result;
+  }
+
+  async clearAuthority(): Promise<HerdrResult> {
+    this.cancelIdle();
+    this.cancelFallbackTimers();
+    const seq = this.nextSeq();
+    const metadataResult = await this.client.reportMetadata({
+      clearSummary: true,
+      clearStateLabels: true,
+      clearDisplayAgent: true,
+      seq,
+    });
+    const result = await this.client.clearAgentAuthority({ seq });
+    this.recordResult(result.ok ? metadataResult : result);
     this.lastKey = undefined;
     return result;
   }
@@ -278,4 +322,10 @@ export class HerdrStateReporter {
 
 function isIntermediateLlmStop(stopReason: string): boolean {
   return stopReason.includes("tool") || stopReason.includes("approval");
+}
+
+function formatLlmErrorMessage(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  const normalized = detail.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+  return normalized ? `LLM error: ${normalized.slice(0, 160)}` : "LLM error";
 }

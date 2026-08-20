@@ -1,9 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { HerdrStateReporter } from "../src/state-reporter";
-import type { HerdrAgentState, HerdrResult, ReleaseAgentInput, ReportAgentInput } from "../src/herdr-client";
+import type {
+  HerdrAgentState,
+  HerdrResult,
+  ReleaseAgentInput,
+  ReportAgentInput,
+  ClearAgentAuthorityInput,
+  ReportMetadataInput,
+} from "../src/herdr-client";
 
 class FakeClient {
   reports: ReportAgentInput[] = [];
+  metadata: ReportMetadataInput[] = [];
+  clears: ClearAgentAuthorityInput[] = [];
   releases: ReleaseAgentInput[] = [];
 
   async reportAgent(input: ReportAgentInput): Promise<HerdrResult> {
@@ -11,8 +20,18 @@ class FakeClient {
     return { ok: true };
   }
 
+  async reportMetadata(input: ReportMetadataInput): Promise<HerdrResult> {
+    this.metadata.push({ ...input });
+    return { ok: true };
+  }
+
   async releaseAgent(input: ReleaseAgentInput): Promise<HerdrResult> {
     this.releases.push({ ...input });
+    return { ok: true };
+  }
+
+  async clearAgentAuthority(input: ClearAgentAuthorityInput): Promise<HerdrResult> {
+    this.clears.push({ ...input });
     return { ok: true };
   }
 }
@@ -33,6 +52,31 @@ describe("HerdrStateReporter", () => {
       seq: 10_001,
       agentSessionId: "conv-1",
     });
+    expect(client.metadata[0]).toMatchObject({
+      customStatus: "turn",
+      stateLabels: { working: "turn" },
+      seq: 10_001,
+    });
+  });
+
+  test("reports display labels through metadata, not lifecycle payloads", async () => {
+    const client = new FakeClient();
+    const reporter = new HerdrStateReporter(client, { now: () => 11, idleDelayMs: 20 });
+
+    await reporter.onToolStart({ conversationId: "conv-label", toolName: "exec_command" });
+
+    expect(client.reports[0]).toMatchObject({
+      state: "working",
+      customStatus: "tool:exec_command",
+      seq: 11_001,
+    });
+    expect(client.metadata).toEqual([
+      {
+        customStatus: "tool:exec_command",
+        stateLabels: { working: "tool:exec_command" },
+        seq: 11_001,
+      },
+    ]);
   });
 
   test("llm end schedules idle and cancels if a tool starts", async () => {
@@ -107,7 +151,11 @@ describe("HerdrStateReporter", () => {
     await reporter.onLlmEnd({ conversationId: "conv-4", stopReason: "error", error: new Error("boom") });
 
     expect(client.reports).toHaveLength(1);
-    expect(client.reports[0]).toMatchObject({ state: "blocked", customStatus: "llm error" });
+    expect(client.reports[0]).toMatchObject({
+      state: "blocked",
+      customStatus: "llm error",
+      message: "LLM error: boom",
+    });
   });
 
   test("turn start has stale-working fallback for hosts without llm_end", async () => {
@@ -273,6 +321,7 @@ describe("HerdrStateReporter", () => {
 
     expect(client.releases).toHaveLength(1);
     expect(client.releases[0]).toMatchObject({ seq: 60_001, agentSessionId: "conv-6" });
+    expect(client.metadata[0]).toMatchObject({ clearSummary: true, clearStateLabels: true, seq: 60_001 });
     expect(client.reports).toHaveLength(0);
   });
 
@@ -313,6 +362,25 @@ describe("HerdrStateReporter", () => {
     const onClient = new FakeClient();
     const on = new HerdrStateReporter(onClient, { now: () => 71, reportApprovalBlocked: true });
     await on.onPermissionCheck({ conversationId: "conv-7", phase: "approval" });
-    expect(onClient.reports[0]).toMatchObject({ state: "blocked", customStatus: "approval" });
+    expect(onClient.reports[0]).toMatchObject({
+      state: "blocked",
+      customStatus: "approval",
+      message: "Approval required",
+    });
+  });
+
+  test("clear authority clears display metadata and this source's lifecycle authority", async () => {
+    const client = new FakeClient();
+    const reporter = new HerdrStateReporter(client, { now: () => 80 });
+
+    await reporter.clearAuthority();
+
+    expect(client.metadata[0]).toMatchObject({
+      clearSummary: true,
+      clearStateLabels: true,
+      clearDisplayAgent: true,
+      seq: 80_001,
+    });
+    expect(client.clears[0]).toEqual({ seq: 80_001 });
   });
 });

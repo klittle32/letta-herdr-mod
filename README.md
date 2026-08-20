@@ -8,7 +8,7 @@ The mod is intentionally narrow: it reports state for the current Herdr pane, ex
 
 The primary lifecycle mapping follows Herdr's built-in harness integrations:
 
-| Letta event | Herdr state | Custom status | Notes |
+| Letta event | Herdr state | Display metadata | Notes |
 | --- | --- | --- | --- |
 | `conversation_open` | `idle` | `ready` | Initializes pane state. |
 | `turn_start` | `working` | `turn` | Start of an agent turn. |
@@ -19,6 +19,10 @@ The primary lifecycle mapping follows Herdr's built-in harness integrations:
 | `conversation_close` / `/reload` | release | n/a | Releases this mod's lifecycle authority for the pane. |
 
 `turn_start` -> `working` and `turn_end` -> `idle` are the durable lifecycle boundaries. Tool events are deliberately not treated as completion signals by default.
+
+For Herdr 0.8.2 and newer, lifecycle reports are semantic state only. The mod sends labels such as `thinking` and `tool:<name>` through `pane.report_metadata` as display-only metadata (`summary` token plus a state label) instead of the old `custom_status` field on `pane.report_agent`.
+
+Blocked states include short Herdr messages where Letta exposes enough context, such as `Approval required` or a bounded LLM error message.
 
 ## Requirements
 
@@ -85,6 +89,12 @@ In Letta Code:
 /herdr-status
 ```
 
+If Herdr shows stale state for this mod after a crash or interrupted reload, clear this mod's lifecycle authority and display metadata without touching other Herdr sources:
+
+```text
+/herdr-repair
+```
+
 Expected healthy output includes:
 
 ```text
@@ -104,6 +114,7 @@ Set optional environment variables wherever you launch Letta Code/Herdr.
 | --- | --- | --- |
 | `LETTA_HERDR_SOURCE` | `letta-code:mod` | Herdr lifecycle source id used when reporting/releasing state. Must match `[A-Za-z0-9:._-]` and be at most 80 characters. |
 | `LETTA_HERDR_AGENT` | `letta-code` | Herdr agent label shown for this reporter. |
+| `LETTA_HERDR_DISPLAY_AGENT` | `$AGENT_NAME` | Optional display-only Herdr agent name. Defaults to Letta Code's agent name when available, leaving lifecycle authority as `LETTA_HERDR_AGENT`. |
 | `LETTA_HERDR_IDLE_DELAY_MS` | `250` | Debounce before reporting idle after Letta's `turn_end` or a final LLM completion event. Must be a positive integer. |
 | `LETTA_HERDR_STALE_WORKING_MS` | `300000` | Conservative safety fallback before reporting idle after a turn/LLM working event if no `turn_end` or completion event arrives. Set `0` to disable. |
 | `LETTA_HERDR_POST_TOOL_IDLE_MS` | `0` | Opt-in fallback before reporting idle after a tool completes and no next tool/turn-end event arrives. Disabled by default because `turn_end` is the primary completion signal. |

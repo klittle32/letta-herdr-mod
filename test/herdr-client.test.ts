@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import {
   HerdrClient,
+  deriveMetadataSource,
   normalizeCustomStatus,
   resolveHerdrEnv,
   validSourceId,
@@ -99,6 +100,11 @@ describe("validation helpers", () => {
     expect(validSourceId("x".repeat(81))).toBe(false);
   });
 
+  test("derives a stable metadata source id", () => {
+    expect(deriveMetadataSource("letta-code:mod")).toBe("letta-code:mod:metadata");
+    expect(deriveMetadataSource("x".repeat(80))).toBe(`${"x".repeat(75)}:meta`);
+  });
+
   test("normalizes custom status for Herdr display", () => {
     expect(normalizeCustomStatus("  thinking\nnow  ")).toBe("thinkingnow");
     expect(normalizeCustomStatus("x".repeat(40))).toBe("x".repeat(32));
@@ -108,7 +114,7 @@ describe("validation helpers", () => {
 });
 
 describe("HerdrClient", () => {
-  test("reports agent state over JSON-lines socket", async () => {
+  test("reports semantic agent state over JSON-lines socket", async () => {
     const socketPath = join(tempDir, "herdr.sock");
     const fake = await startFakeHerdrSocket(socketPath);
     server = fake.server;
@@ -141,9 +147,76 @@ describe("HerdrClient", () => {
         source: "letta-code:mod",
         agent: "letta-code",
         state: "working",
-        custom_status: "thinking",
         seq: 42,
         agent_session_id: "conv-123",
+      },
+    });
+    expect(fake.requests[0]?.params).not.toHaveProperty("custom_status");
+  });
+
+  test("reports display metadata separately from lifecycle state", async () => {
+    const socketPath = join(tempDir, "herdr.sock");
+    const fake = await startFakeHerdrSocket(socketPath);
+    server = fake.server;
+
+    const client = new HerdrClient({
+      env: {
+        enabled: true,
+        socketPath,
+        paneId: "w1:p1",
+        binPath: undefined,
+      },
+      source: "letta-code:mod",
+      agent: "letta-code",
+      displayAgent: "Johnny5",
+      requestTimeoutMs: 250,
+    });
+
+    const result = await client.reportMetadata({
+      customStatus: "thinking\nnow",
+      stateLabels: { working: "thinking\nnow" },
+      seq: 43,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(fake.requests).toHaveLength(1);
+    expect(fake.requests[0]).toMatchObject({
+      method: "pane.report_metadata",
+      params: {
+        pane_id: "w1:p1",
+        source: "letta-code:mod:metadata",
+        agent: "letta-code",
+        applies_to_source: "letta-code:mod",
+        display_agent: "Johnny5",
+        tokens: { summary: "thinkingnow" },
+        state_labels: { working: "thinkingnow" },
+        seq: 43,
+      },
+    });
+  });
+
+  test("clears this mod's lifecycle authority over JSON-lines socket", async () => {
+    const socketPath = join(tempDir, "herdr.sock");
+    const fake = await startFakeHerdrSocket(socketPath);
+    server = fake.server;
+
+    const client = new HerdrClient({
+      env: { enabled: true, socketPath, paneId: "w1:p1", binPath: undefined },
+      source: "letta-code:mod",
+      agent: "letta-code",
+      requestTimeoutMs: 250,
+    });
+
+    const result = await client.clearAgentAuthority({ seq: 44 });
+
+    expect(result.ok).toBe(true);
+    expect(fake.requests).toHaveLength(1);
+    expect(fake.requests[0]).toMatchObject({
+      method: "pane.clear_agent_authority",
+      params: {
+        pane_id: "w1:p1",
+        source: "letta-code:mod",
+        seq: 44,
       },
     });
   });
