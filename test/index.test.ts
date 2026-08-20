@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import activate, {
   createReporterFromEnv,
+  extractDisplayAgent,
   parseIdleDelayMs,
   parsePostToolIdleMs,
   parseStaleWorkingMs,
@@ -99,6 +100,12 @@ describe("mod config helpers", () => {
     });
     expect(bundle.reporter).toBeDefined();
     expect((bundle.client as any).displayAgent).toBe("Johnny5");
+  });
+
+  test("extracts display agent from mod event context", () => {
+    expect(extractDisplayAgent({ agent: { name: "Johnny5" } })).toBe("Johnny5");
+    expect(extractDisplayAgent({ agent: { name: "  " } })).toBeUndefined();
+    expect(extractDisplayAgent({})).toBeUndefined();
   });
 });
 

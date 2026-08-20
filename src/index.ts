@@ -57,10 +57,12 @@ export default function activate(letta: LettaModApi): Dispose | undefined {
 
   if (letta.capabilities?.events?.lifecycle && letta.events) {
     disposers.push(
-      letta.events.on("conversation_open", (event) => {
+      letta.events.on("conversation_open", (event, ctx) => {
+        applyDisplayAgent(reporter, ctx);
         void reporter?.onConversationOpen({ conversationId: event?.conversationId });
       }),
-      letta.events.on("conversation_close", (event) => {
+      letta.events.on("conversation_close", (event, ctx) => {
+        applyDisplayAgent(reporter, ctx);
         void reporter?.release(event?.conversationId);
       }),
     );
@@ -68,10 +70,12 @@ export default function activate(letta: LettaModApi): Dispose | undefined {
 
   if (letta.capabilities?.events?.turns && letta.events) {
     disposers.push(
-      letta.events.on("turn_start", (event) => {
+      letta.events.on("turn_start", (event, ctx) => {
+        applyDisplayAgent(reporter, ctx);
         void reporter?.onTurnStart({ conversationId: event?.conversationId });
       }),
-      letta.events.on("turn_end", (event) => {
+      letta.events.on("turn_end", (event, ctx) => {
+        applyDisplayAgent(reporter, ctx);
         reporter?.onTurnEnd({ conversationId: event?.conversationId });
       }),
     );
@@ -79,13 +83,15 @@ export default function activate(letta: LettaModApi): Dispose | undefined {
 
   if (letta.capabilities?.events?.tools && letta.events) {
     disposers.push(
-      letta.events.on("tool_start", (event) => {
+      letta.events.on("tool_start", (event, ctx) => {
+        applyDisplayAgent(reporter, ctx);
         void reporter?.onToolStart({
           conversationId: event?.conversationId,
           toolName: String(event?.toolName ?? "tool"),
         });
       }),
-      letta.events.on("tool_end", (event) => {
+      letta.events.on("tool_end", (event, ctx) => {
+        applyDisplayAgent(reporter, ctx);
         void reporter?.onToolEnd({ conversationId: event?.conversationId });
       }),
     );
@@ -93,10 +99,12 @@ export default function activate(letta: LettaModApi): Dispose | undefined {
 
   if (letta.capabilities?.events?.llm && letta.events) {
     disposers.push(
-      letta.events.on("llm_start", (event) => {
+      letta.events.on("llm_start", (event, ctx) => {
+        applyDisplayAgent(reporter, ctx);
         void reporter?.onLlmStart({ conversationId: event?.conversationId });
       }),
-      letta.events.on("llm_end", (event) => {
+      letta.events.on("llm_end", (event, ctx) => {
+        applyDisplayAgent(reporter, ctx);
         void reporter?.onLlmEnd({
           conversationId: event?.conversationId,
           stopReason: event?.stopReason,
@@ -113,6 +121,7 @@ export default function activate(letta: LettaModApi): Dispose | undefined {
         description:
           "Optionally reports Herdr blocked state during Letta permission approval classification.",
         check(event) {
+          applyDisplayAgent(reporter, event?.context);
           void reporter?.onPermissionCheck({
             conversationId: event?.conversationId,
             phase: event?.phase,
@@ -205,6 +214,15 @@ export function parseToolWatchdogMs(value: string | undefined): number {
 export function shouldReportApprovalBlocked(env: NodeJS.ProcessEnv | Record<string, string | undefined>): boolean {
   const value = env.LETTA_HERDR_APPROVAL_BLOCKED?.toLowerCase();
   return value === "1" || value === "true" || value === "yes";
+}
+
+export function extractDisplayAgent(ctx: unknown): string | undefined {
+  const name = (ctx as { agent?: { name?: unknown } } | null | undefined)?.agent?.name;
+  return typeof name === "string" && name.trim() ? name.trim() : undefined;
+}
+
+function applyDisplayAgent(reporter: HerdrStateReporter | undefined, ctx: unknown): void {
+  reporter?.setDisplayAgent(extractDisplayAgent(ctx));
 }
 
 function formatStatus(bundle: ReporterBundle | undefined): string {

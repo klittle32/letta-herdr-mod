@@ -76,6 +76,7 @@ export class HerdrStateReporter {
   private lastSeq: number | null = null;
   private lastError: string | null = null;
   private lastResultOk: boolean | null = null;
+  private displayAgent: string | undefined;
 
   constructor(
     private readonly client: HerdrReporterClient,
@@ -87,6 +88,11 @@ export class HerdrStateReporter {
     this.postToolIdleMs = options.postToolIdleMs ?? DEFAULT_POST_TOOL_IDLE_MS;
     this.toolWatchdogMs = options.toolWatchdogMs ?? DEFAULT_TOOL_WATCHDOG_MS;
     this.reportApprovalBlocked = options.reportApprovalBlocked ?? false;
+  }
+
+  setDisplayAgent(displayAgent: string | undefined): void {
+    const normalized = normalizeDisplayAgent(displayAgent);
+    if (normalized) this.displayAgent = normalized;
   }
 
   async onConversationOpen(event: ConversationEvent): Promise<void> {
@@ -177,6 +183,7 @@ export class HerdrStateReporter {
     const metadataResult = customStatus
       ? await this.client.reportMetadata({
           customStatus,
+          displayAgent: this.displayAgent,
           stateLabels: { [state]: customStatus },
           seq,
         })
@@ -328,4 +335,10 @@ function formatLlmErrorMessage(error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
   const normalized = detail.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
   return normalized ? `LLM error: ${normalized.slice(0, 160)}` : "LLM error";
+}
+
+function normalizeDisplayAgent(displayAgent: string | undefined): string | undefined {
+  if (displayAgent == null) return undefined;
+  const normalized = displayAgent.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  return normalized || undefined;
 }

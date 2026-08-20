@@ -62,6 +62,7 @@ describe("HerdrStateReporter", () => {
   test("reports display labels through metadata, not lifecycle payloads", async () => {
     const client = new FakeClient();
     const reporter = new HerdrStateReporter(client, { now: () => 11, idleDelayMs: 20 });
+    reporter.setDisplayAgent("Johnny5");
 
     await reporter.onToolStart({ conversationId: "conv-label", toolName: "exec_command" });
 
@@ -73,6 +74,7 @@ describe("HerdrStateReporter", () => {
     expect(client.metadata).toEqual([
       {
         customStatus: "tool:exec_command",
+        displayAgent: "Johnny5",
         stateLabels: { working: "tool:exec_command" },
         seq: 11_001,
       },
