@@ -143,6 +143,10 @@ Or run the full local check:
 bun run check
 ```
 
+## License
+
+MIT. See [LICENSE](LICENSE).
+
 ## Limitations
 
 - Letta Code's current mod API does not expose a precise `permission prompt opened` / `permission prompt resolved` event. By default this mod avoids over-reporting `blocked`; during approval waits, Herdr may show `working` until the tool starts, the approval resolves, or the turn continues.
