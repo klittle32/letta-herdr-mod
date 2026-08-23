@@ -2,6 +2,7 @@
   "name": "letta-herdr-mod",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Letta Code mod that reports semantic agent state to Herdr.",
   "scripts": {
