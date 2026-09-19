@@ -1,266 +1,193 @@
-import { HerdrClient, resolveHerdrEnv, type ResolvedHerdrEnv } from "./herdr-client";
 import {
-  DEFAULT_IDLE_DELAY_MS,
-  DEFAULT_POST_TOOL_IDLE_MS,
-  DEFAULT_STALE_WORKING_MS,
-  DEFAULT_TOOL_WATCHDOG_MS,
-  HerdrStateReporter,
-  type HerdrReporterClient,
-} from "./state-reporter";
+  HerdrClient,
+  normalizeLabel,
+  resolveHerdrEnv,
+  validTtl,
+  type ResolvedHerdrEnv,
+} from "./herdr-client";
+import {
+  MetadataReporter,
+  type EventName,
+  type Observation,
+  type ScopedContext,
+} from "./metadata-reporter";
 
 type Dispose = () => void;
-
 type LettaModApi = {
   capabilities?: {
-    events?: {
-      lifecycle?: boolean;
-      turns?: boolean;
-      tools?: boolean;
-      llm?: boolean;
-    };
+    events?: Partial<Record<"lifecycle" | "turns" | "tools" | "llm", boolean>>;
     commands?: boolean;
-    permissions?: boolean;
   };
   events?: {
-    on(name: string, handler: (event: any, ctx?: any) => unknown): Dispose;
+    on(
+      name: string,
+      handler: (event: Observation, ctx?: ScopedContext) => void,
+    ): Dispose;
   };
   commands?: {
     register(command: {
       id: string;
       description: string;
-      args?: string;
-      showInTranscript?: boolean;
-      run(ctx: any): unknown;
+      showInTranscript: boolean;
+      run(ctx: ScopedContext): Promise<{ type: "output"; output: string }>;
     }): Dispose;
   };
-  permissions?: {
-    register(overlay: {
-      id: string;
-      description: string;
-      check(event: any): unknown;
-    }): Dispose;
+  diagnostics?: {
+    report(diagnostic: { message: string; severity: "warning" }): void;
   };
 };
-
 type ReporterBundle = {
   env: ResolvedHerdrEnv;
-  client?: HerdrReporterClient;
-  reporter?: HerdrStateReporter;
+  client?: HerdrClient;
+  reporter?: MetadataReporter;
+  warnings: string[];
 };
-
-let activeBundle: ReporterBundle | undefined;
-
-export default function activate(letta: LettaModApi): Dispose | undefined {
+const eventGroups = {
+  lifecycle: ["conversation_open", "conversation_close"],
+  turns: ["turn_start", "turn_end"],
+  tools: ["tool_start", "tool_end"],
+  llm: ["llm_start", "llm_end"],
+} as const;
+export default function activate(letta: LettaModApi): Dispose {
+  const bundle = createReporterFromEnv(process.env);
   const disposers: Dispose[] = [];
-  activeBundle = createReporterFromEnv(process.env);
-  const reporter = activeBundle.reporter;
-
-  if (letta.capabilities?.events?.lifecycle && letta.events) {
-    disposers.push(
-      letta.events.on("conversation_open", (event, ctx) => {
-        applyDisplayAgent(reporter, ctx);
-        void reporter?.onConversationOpen({ conversationId: event?.conversationId });
-      }),
-      letta.events.on("conversation_close", (event, ctx) => {
-        applyDisplayAgent(reporter, ctx);
-        void reporter?.release(event?.conversationId);
-      }),
-    );
+  for (const group of Object.keys(
+    eventGroups,
+  ) as (keyof typeof eventGroups)[]) {
+    if (letta.capabilities?.events?.[group] && letta.events) {
+      for (const name of eventGroups[group])
+        disposers.push(
+          letta.events.on(name, (event, ctx) => {
+            void bundle.reporter?.observe(name as EventName, event, ctx);
+          }),
+        );
+    } else
+      bundle.warnings.push(
+        `${group} events unavailable; related metadata cannot refresh`,
+      );
   }
-
-  if (letta.capabilities?.events?.turns && letta.events) {
-    disposers.push(
-      letta.events.on("turn_start", (event, ctx) => {
-        applyDisplayAgent(reporter, ctx);
-        void reporter?.onTurnStart({ conversationId: event?.conversationId });
-      }),
-      letta.events.on("turn_end", (event, ctx) => {
-        applyDisplayAgent(reporter, ctx);
-        reporter?.onTurnEnd({ conversationId: event?.conversationId });
-      }),
-    );
-  }
-
-  if (letta.capabilities?.events?.tools && letta.events) {
-    disposers.push(
-      letta.events.on("tool_start", (event, ctx) => {
-        applyDisplayAgent(reporter, ctx);
-        void reporter?.onToolStart({
-          conversationId: event?.conversationId,
-          toolName: String(event?.toolName ?? "tool"),
-        });
-      }),
-      letta.events.on("tool_end", (event, ctx) => {
-        applyDisplayAgent(reporter, ctx);
-        void reporter?.onToolEnd({ conversationId: event?.conversationId });
-      }),
-    );
-  }
-
-  if (letta.capabilities?.events?.llm && letta.events) {
-    disposers.push(
-      letta.events.on("llm_start", (event, ctx) => {
-        applyDisplayAgent(reporter, ctx);
-        void reporter?.onLlmStart({ conversationId: event?.conversationId });
-      }),
-      letta.events.on("llm_end", (event, ctx) => {
-        applyDisplayAgent(reporter, ctx);
-        void reporter?.onLlmEnd({
-          conversationId: event?.conversationId,
-          stopReason: event?.stopReason,
-          error: event?.error,
-        });
-      }),
-    );
-  }
-
-  if (letta.capabilities?.permissions && letta.permissions) {
-    disposers.push(
-      letta.permissions.register({
-        id: "letta-herdr-mod-approval-observer",
-        description:
-          "Optionally reports Herdr blocked state during Letta permission approval classification.",
-        check(event) {
-          applyDisplayAgent(reporter, event?.context);
-          void reporter?.onPermissionCheck({
-            conversationId: event?.conversationId,
-            phase: event?.phase,
-          });
-          return undefined;
-        },
-      }),
-    );
-  }
-
-  if (letta.capabilities?.commands && letta.commands) {
+  // Setup warnings are emitted once per activation, not once per event.
+  if (bundle.warnings.length)
+    letta.diagnostics?.report({
+      message: bundle.warnings.join("; "),
+      severity: "warning",
+    });
+  if (letta.capabilities?.commands && letta.commands)
     disposers.push(
       letta.commands.register({
         id: "herdr-status",
-        description: "Show letta-herdr-mod connection and last-report status.",
+        description: "Read Herdr pane identity and presentation diagnostics.",
         showInTranscript: false,
-        run() {
-          return { type: "output", output: formatStatus(activeBundle) };
-        },
-      }),
-      letta.commands.register({
-        id: "herdr-repair",
-        description: "Clear this mod's stale Herdr lifecycle authority and display metadata.",
-        showInTranscript: false,
-        async run() {
-          const result = await activeBundle?.reporter?.clearAuthority();
-          if (!activeBundle?.env.enabled) {
-            return { type: "output", output: formatStatus(activeBundle) };
-          }
-          if (!result) {
-            return { type: "output", output: "letta-herdr-mod: no active reporter" };
-          }
-          return {
-            type: "output",
-            output: result.ok ? "letta-herdr-mod: cleared Herdr authority" : `letta-herdr-mod: repair failed\n${formatStatus(activeBundle)}`,
-          };
+        async run(ctx) {
+          return { type: "output", output: await formatStatus(bundle, ctx) };
         },
       }),
     );
-  }
-
   return () => {
-    void reporter?.release();
-    for (const dispose of disposers.reverse()) {
-      dispose();
-    }
-    activeBundle = undefined;
+    for (const dispose of disposers.reverse()) dispose();
+    void bundle.reporter?.dispose();
   };
 }
-
-export function createReporterFromEnv(env: NodeJS.ProcessEnv | Record<string, string | undefined>): ReporterBundle {
-  const resolvedEnv = resolveHerdrEnv(env);
-  if (!resolvedEnv.enabled) {
-    return { env: resolvedEnv };
+export function parseActivityTtl(value: string | undefined): number {
+  const parsed = Number(value);
+  return validTtl(parsed) ? parsed : 30000;
+}
+export function createReporterFromEnv(
+  env: Record<string, string | undefined>,
+): ReporterBundle {
+  const retired = [
+    "AGENT",
+    "STATE",
+    "IDLE_DELAY_MS",
+    "STALE_WORKING_MS",
+    "POST_TOOL_IDLE_MS",
+    "TOOL_WATCHDOG_MS",
+    "APPROVAL_BLOCKED",
+  ].filter((key) => env[`LETTA_HERDR_${key}`] !== undefined);
+  const warnings = retired.length
+    ? [
+        `retired settings ignored: ${retired.map((key) => `LETTA_HERDR_${key}`).join(", ")}`,
+      ]
+    : [];
+  const resolved =
+    env.LETTA_CODE_AGENT_ROLE === "subagent"
+      ? {
+          enabled: false as const,
+          reason: "subagent inherits the parent pane; metadata disabled",
+        }
+      : resolveHerdrEnv(env);
+  if (!resolved.enabled) return { env: resolved, warnings };
+  try {
+    const client = new HerdrClient({
+      env: resolved,
+      source: env.LETTA_HERDR_SOURCE,
+    });
+    const reporter = new MetadataReporter(client, {
+      displayAgent: env.LETTA_HERDR_DISPLAY_AGENT,
+      activity: env.LETTA_HERDR_ACTIVITY_DETAIL === "1",
+      ttlMs: parseActivityTtl(env.LETTA_HERDR_ACTIVITY_TTL_MS),
+    });
+    return { env: resolved, warnings, client, reporter };
+  } catch {
+    return {
+      env: { enabled: false, reason: "invalid Herdr metadata configuration" },
+      warnings,
+    };
   }
-
-  const client = new HerdrClient({
-    env: resolvedEnv,
-    source: env.LETTA_HERDR_SOURCE,
-    agent: env.LETTA_HERDR_AGENT,
-    displayAgent: env.LETTA_HERDR_DISPLAY_AGENT ?? env.AGENT_NAME,
-  });
-  const reporter = new HerdrStateReporter(client, {
-    idleDelayMs: parseIdleDelayMs(env.LETTA_HERDR_IDLE_DELAY_MS),
-    staleWorkingMs: parseStaleWorkingMs(env.LETTA_HERDR_STALE_WORKING_MS),
-    postToolIdleMs: parsePostToolIdleMs(env.LETTA_HERDR_POST_TOOL_IDLE_MS),
-    toolWatchdogMs: parseToolWatchdogMs(env.LETTA_HERDR_TOOL_WATCHDOG_MS),
-    reportApprovalBlocked: shouldReportApprovalBlocked(env),
-  });
-
-  return { env: resolvedEnv, client, reporter };
 }
-
-export function parseIdleDelayMs(value: string | undefined): number {
-  return parseDurationMs(value, DEFAULT_IDLE_DELAY_MS, { allowZero: false });
-}
-
-export function parseStaleWorkingMs(value: string | undefined): number {
-  return parseDurationMs(value, DEFAULT_STALE_WORKING_MS, { allowZero: true });
-}
-
-export function parsePostToolIdleMs(value: string | undefined): number {
-  return parseDurationMs(value, DEFAULT_POST_TOOL_IDLE_MS, { allowZero: true });
-}
-
-export function parseToolWatchdogMs(value: string | undefined): number {
-  return parseDurationMs(value, DEFAULT_TOOL_WATCHDOG_MS, { allowZero: true });
-}
-
-export function shouldReportApprovalBlocked(env: NodeJS.ProcessEnv | Record<string, string | undefined>): boolean {
-  const value = env.LETTA_HERDR_APPROVAL_BLOCKED?.toLowerCase();
-  return value === "1" || value === "true" || value === "yes";
-}
-
-export function extractDisplayAgent(ctx: unknown): string | undefined {
-  const name = (ctx as { agent?: { name?: unknown } } | null | undefined)?.agent?.name;
-  return typeof name === "string" && name.trim() ? name.trim() : undefined;
-}
-
-function applyDisplayAgent(reporter: HerdrStateReporter | undefined, ctx: unknown): void {
-  reporter?.setDisplayAgent(extractDisplayAgent(ctx));
-}
-
-function formatStatus(bundle: ReporterBundle | undefined): string {
-  if (!bundle) return "letta-herdr-mod: not initialized";
-
-  if (!bundle.env.enabled) {
-    return ["letta-herdr-mod: disabled", `reason: ${bundle.env.reason}`].join("\n");
-  }
-
+export async function formatStatus(
+  bundle: ReporterBundle,
+  ctx: ScopedContext,
+): Promise<string> {
+  if (!bundle.env.enabled)
+    return `letta-herdr-mod: disabled\nreason: ${bundle.env.reason}`;
   const snapshot = bundle.reporter?.snapshot();
+  const result = await bundle.client!.getPane();
+  const raw = result.ok ? result.response.pane : undefined;
+  const pane =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : undefined;
+  const valid =
+    pane?.pane_id === bundle.env.paneId &&
+    typeof pane.agent_status === "string";
+  const session =
+    valid && pane.agent_session && typeof pane.agent_session === "object"
+      ? (pane.agent_session as Record<string, unknown>)
+      : undefined;
+  const conversationId = ctx.conversation?.id ?? ctx.sessionId;
+  const expectedSession =
+    conversationId === "default"
+      ? ctx.agent?.id
+        ? `default:${ctx.agent.id}`
+        : undefined
+      : conversationId;
+  const observedSession =
+    typeof session?.value === "string" ? session.value : undefined;
+  const safe = (value: unknown) => normalizeLabel(value) ?? "none";
   return [
-    "letta-herdr-mod: enabled",
+    "letta-herdr-mod: enabled (metadata only)",
     `pane: ${bundle.env.paneId}`,
-    `socket: ${bundle.env.socketPath}`,
-    `last state: ${snapshot?.lastState ?? "none"}`,
-    `last status: ${snapshot?.lastCustomStatus ?? "none"}`,
-    `last conversation: ${snapshot?.lastConversationId ?? "none"}`,
-    `last seq: ${snapshot?.lastSeq ?? "none"}`,
-    `last result: ${snapshot?.lastResultOk == null ? "none" : snapshot.lastResultOk ? "ok" : "error"}`,
-    `stale working fallback: ${snapshot?.staleWorkingMs ?? "unknown"}ms`,
-    `post-tool idle fallback: ${snapshot?.postToolIdleMs ?? "unknown"}ms`,
-    `tool watchdog: ${snapshot?.toolWatchdogMs ?? "unknown"}ms`,
-    snapshot?.lastError ? `last error: ${snapshot.lastError}` : undefined,
+    `expected name (local intent): ${safe(snapshot?.expectedName)}`,
+    `last write acknowledgement: ${snapshot?.lastAck == null ? "none" : snapshot.lastAck ? "ok (not proof of application)" : "failed"}`,
+    valid
+      ? `read-back display: ${safe(pane.display_agent)}; semantic state: ${safe(pane.agent_status)}`
+      : `read-back unavailable: ${result.ok ? "invalid pane read-back" : result.error}`,
+    `session reference: ${safe(observedSession)}; source: ${safe(session?.source)}; agent: ${safe(session?.agent)}`,
+    !observedSession
+      ? "warning: native session identity absent or unreadable"
+      : session?.source !== "herdr:letta" ||
+          session?.agent !== "letta" ||
+          session?.kind !== "id"
+        ? "warning: session reference is not native Letta"
+        : expectedSession && expectedSession !== observedSession
+          ? "warning: native session identity mismatch"
+          : undefined,
+    `activity: ${snapshot?.activity ? "on" : "off"}; TTL: ${snapshot?.ttlMs ?? 30000}ms`,
+    snapshot?.lastError ? `last write error: ${snapshot.lastError}` : undefined,
+    ...bundle.warnings,
+    "Read-back text is not proof of metadata source ownership.",
   ]
     .filter(Boolean)
     .join("\n");
-}
-
-function parseDurationMs(
-  value: string | undefined,
-  defaultValue: number,
-  options: { allowZero: boolean },
-): number {
-  if (value == null || value.trim() === "") return defaultValue;
-
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed)) return defaultValue;
-  if (parsed < 0) return defaultValue;
-  if (!options.allowZero && parsed === 0) return defaultValue;
-  return parsed;
 }

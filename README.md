@@ -1,155 +1,94 @@
 # letta-herdr-mod
 
-A small [Letta Code](https://github.com/letta-ai/letta-code) mod that reports the current agent state to [Herdr](https://herdr.dev/docs/), the terminal-native agent multiplexer.
+A small **metadata-only supplement** to [Herdr](https://herdr.dev/docs/)'s **currently experimental native integration for [Letta Code](https://github.com/letta-ai/letta-code)**. This mod is not a replacement for that integration and does not make its experimental behavior production-certified.
 
-The mod is intentionally narrow: it reports state for the current Herdr pane, exposes a local diagnostics command, and releases its Herdr lifecycle authority when Letta Code closes the conversation or reloads mods. It does **not** create panes, move panes, or otherwise orchestrate Herdr; pane orchestration belongs in a separate Herdr skill or workflow.
+## Limited scope: presentation niceties only
 
-## What it reports
+This mod adds just three things:
 
-The primary lifecycle mapping follows Herdr's built-in harness integrations:
+- **Stable agent name:** show the agent's name (for example, `Johnny5`) rather than only the harness name. Names refresh when supported Letta events arrive; an idle rename may not appear immediately.
+- **Optional expiring activity detail:** short labels such as `tool:Read`, displayed while Herdr considers the agent working. Disabled by default; when enabled, labels expire after 30 seconds unless refreshed. They do not determine whether the agent is working, idle or blocked.
+- **Read-only diagnostics:** `/herdr-status` shows what the mod intended and what Herdr actually reports, without changing or repairing anything.
 
-| Letta event | Herdr state | Display metadata | Notes |
-| --- | --- | --- | --- |
-| `conversation_open` | `idle` | `ready` | Initializes pane state. |
-| `turn_start` | `working` | `turn` | Start of an agent turn. |
-| `llm_start` | `working` | `thinking` | Model is processing. |
-| `tool_start` | `working` | `tool:<name>` | Tool events are status detail within a turn. |
-| `tool_end` | `working` | `thinking` | Avoids flickering to idle between tool calls. |
-| `turn_end` | `idle` | `ready` | Debounced by `LETTA_HERDR_IDLE_DELAY_MS`. |
-| `conversation_close` / `/reload` | release | n/a | Releases this mod's lifecycle authority for the pane. |
+Everything else stays with the native integration and Herdr:
 
-`turn_start` -> `working` and `turn_end` -> `idle` are the durable lifecycle boundaries. Tool events are deliberately not treated as completion signals by default.
+| Owner | Responsibility |
+| --- | --- |
+| Native Letta SessionStart hook | Conversation identity and agent-qualified default sessions |
+| Herdr | Restore dispatch, working/idle/blocked state, waits, notifications and completion badges |
+| This mod | Display name, optional working label and diagnostics |
 
-For Herdr 0.8.2 and newer, lifecycle reports are semantic state only. The mod sends labels such as `thinking` and `tool:<name>` through `pane.report_metadata` as display-only metadata (`summary` token plus a state label) instead of the old `custom_status` field on `pane.report_agent`.
+The mod never reports semantic state or session identity, releases lifecycle authority, clears authority, installs hooks, handles permissions, or orchestrates panes. There is no legacy lifecycle mode.
 
-Blocked states include short Herdr messages where Letta exposes enough context, such as `Approval required` or a bounded LLM error message.
+Earlier versions duplicated lifecycle reporting. That could conflict with native ownership, leaving stale state or damaging restore identity during repair. The narrower scope avoids competing with Herdr: **native integration first, this companion only for presentation**. If native detection or restore is not working, this mod is not a fallback; troubleshoot the native integration separately.
 
-## Requirements
+## Setup
 
-- Letta Code with local mods enabled.
-- Herdr running Letta Code in a Herdr-managed pane.
-- [Bun](https://bun.sh/) for local development/builds.
+Baseline tested: **Herdr 0.9.1 / Letta Code 0.32.13**, Unix sockets. First enable and verify Herdr's experimental native Letta integration and SessionStart hook using Herdr's documented integration setup, then add this companion in a managed pane. Hook installation is an operator task, not a mod side effect. Native integration contracts may change as the experimental support evolves; the tested baseline is not a promise of compatibility with every version.
 
-Herdr normally injects the environment variables this mod needs (`HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID`) into managed panes. Outside a Herdr pane, the mod stays disabled and `/herdr-status` explains why.
+Herdr supplies `HERDR_ENV=1`, `HERDR_SOCKET_PATH` and `HERDR_PANE_ID`. Outside Herdr the mod performs no IPC. Letta child agents marked `LETTA_CODE_AGENT_ROLE=subagent` are also disabled so their inherited pane environment cannot overwrite the parent's name. Other independently launched processes sharing a pane are not fenced; run one foreground Letta owner per pane.
 
-## Install from source
+For a new installation, after reviewing the code:
 
-```bash
-git clone https://github.com/klittle32/letta-herdr-mod.git
-cd letta-herdr-mod
+```sh
 bun install
+bun run check
 bun run install:local
 ```
 
-`bun run install:local` builds the bundled mod and copies it to:
+This copies the bundle to `~/.letta/mods/letta-herdr-mod.mjs`. Restart Letta or use `/reload` for an already metadata-only installation. Installation/release is not part of the test gates.
 
-```text
-~/.letta/mods/letta-herdr-mod.mjs
-```
+## Migrating from the lifecycle reporter (v0.2.1 and earlier)
 
-Then reload Letta Code:
+This is a breaking behavioral change. **Use a fresh Letta process/pane, not just `/reload`.** Remove/disable the old mod before launching the replacement. A Herdr server restart is not required. The old source's custom lifecycle authority can otherwise remain after a hot upgrade; metadata-only code intentionally does not remove it.
 
-```text
-/reload
-```
+If choosing an in-place migration, an operator must identify and safely release the *old custom* authority, then read back native identity and state. Do not clear native authority/identity. Do not use the old `/herdr-repair`: that command has been removed for safety and is not a migration mechanism. Prefer the fresh-pane path when ownership is uncertain.
 
-If you prefer to run the steps manually:
+Before declaring migration complete, verify native named/default session identity, real working/idle/blocked transitions, agent display name, and owned-metadata cleanup on close/reload. Use `/herdr-status` and `herdr pane get "$HERDR_PANE_ID"`. A successful metadata acknowledgement alone is insufficient.
 
-```bash
-bun run build
-mkdir -p ~/.letta/mods
-cp dist/letta-herdr-mod.mjs ~/.letta/mods/letta-herdr-mod.mjs
-```
-
-## Update an existing install
-
-From the source checkout:
-
-```bash
-git pull
-bun install
-bun run install:local
-```
-
-Then run `/reload` in Letta Code.
-
-## Verify inside Herdr
-
-In the shell where Letta Code is running:
-
-```bash
-echo "$HERDR_ENV"
-echo "$HERDR_PANE_ID"
-herdr pane get "$HERDR_PANE_ID"
-```
-
-In Letta Code:
-
-```text
-/herdr-status
-```
-
-If Herdr shows stale state for this mod after a crash or interrupted reload, clear this mod's lifecycle authority and display metadata without touching other Herdr sources:
-
-```text
-/herdr-repair
-```
-
-Expected healthy output includes:
-
-```text
-letta-herdr-mod: enabled
-pane: ...
-socket: ...
-last result: ok
-```
-
-If it says `disabled`, check that Letta Code was launched from a Herdr-managed pane and that `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` are present.
+The intended next release is `v0.3.0` (subject to current tags); the stale package version is deliberately unchanged pending separate release approval.
 
 ## Configuration
 
-Set optional environment variables wherever you launch Letta Code/Herdr.
-
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `LETTA_HERDR_SOURCE` | `letta-code:mod` | Herdr lifecycle source id used when reporting/releasing state. Must match `[A-Za-z0-9:._-]` and be at most 80 characters. |
-| `LETTA_HERDR_AGENT` | `letta-code` | Herdr agent label shown for this reporter. |
-| `LETTA_HERDR_DISPLAY_AGENT` | `$AGENT_NAME` | Optional display-only Herdr agent name. Defaults to Letta Code's agent name when available, leaving lifecycle authority as `LETTA_HERDR_AGENT`. |
-| `LETTA_HERDR_IDLE_DELAY_MS` | `250` | Debounce before reporting idle after Letta's `turn_end` or a final LLM completion event. Must be a positive integer. |
-| `LETTA_HERDR_STALE_WORKING_MS` | `300000` | Conservative safety fallback before reporting idle after a turn/LLM working event if no `turn_end` or completion event arrives. Set `0` to disable. |
-| `LETTA_HERDR_POST_TOOL_IDLE_MS` | `0` | Opt-in fallback before reporting idle after a tool completes and no next tool/turn-end event arrives. Disabled by default because `turn_end` is the primary completion signal. |
-| `LETTA_HERDR_TOOL_WATCHDOG_MS` | `0` | Opt-in watchdog before reporting idle after a tool starts if no `tool_end` or `turn_end` event arrives. Disabled by default; use only for hosts without reliable turn completion. |
-| `LETTA_HERDR_APPROVAL_BLOCKED` | unset | If `1`, `true`, or `yes`, report `blocked · approval` during Letta permission overlay approval classification. Experimental; see limitations below. |
+| `LETTA_HERDR_DISPLAY_AGENT` | scoped Letta agent name | Nonblank explicit override; otherwise current event/context name. `AGENT_NAME` is not used because it can be stale. |
+| `LETTA_HERDR_SOURCE` | `letta-code:mod` | Prefix for two stable, distinct, hashed metadata sources. ASCII letters/digits/`:._-`, 1–80 characters. Keep stable across reloads. |
+| `LETTA_HERDR_ACTIVITY_DETAIL` | off | Set exactly `1` to publish only `state_labels.working`. |
+| `LETTA_HERDR_ACTIVITY_TTL_MS` | `30000` | Positive integer, 1–86400000 ms. Invalid values use the default; no zero/infinite mode. |
 
-Example:
+Retired `LETTA_HERDR_AGENT`, `LETTA_HERDR_STATE`, idle/stale/post-tool/watchdog timers and approval-blocked settings are ignored with one setup diagnostic per activation. They cannot re-enable lifecycle writes.
 
-```bash
-export LETTA_HERDR_IDLE_DELAY_MS=250
-export LETTA_HERDR_STALE_WORKING_MS=300000
+Names are sanitized and limited to 80 Unicode scalar values. `conversation_open` uses its explicit identity/name before scoped context; other supported events refresh names only from matching scoped context. Different agents' `default` contexts are distinct. Observed switches without a name clear the old display name; missing data in the same context can retain it. No title or custom token is written.
+
+Optional activity shows `processing`, `thinking` on local LLM start, `tool:<name>`, or a parallel-tool count. Every activity update refreshes server TTL; name-only observations do not. There is no heartbeat. Tool completion is not background-job completion. Activity clears on observed turn end, model error, context change/close or disposal. Stable names do not expire with activity.
+
+## Diagnostics and limits
+
+`/herdr-status` only reads the calling pane. It reports local expected name, last write acknowledgement, actual read-back display/state/session, activity configuration, capability gaps and last write error. It never refreshes metadata or repairs anything. An ignored guard can still receive a valid acknowledgement; matching text is **not proof of source ownership**. Missing/mismatched native identity is warned about, never corrected.
+
+- Letta does not emit every switch, rename, cancellation or turn-end event. Idle renames/unobserved switches may remain stale until the next supported event. This mod does not fix upstream identity/restore defects.
+- Cloud agents do not emit local LLM events. Turn/tool observations still work where their capabilities are available.
+- A missed completion leaves only the optional label until its TTL expires. A long-running tool can outlast the TTL. Missing detail **never means work completed**; native semantic state remains authoritative.
+- The `agent: letta` guard identifies the harness, not an individual conversation or independent process.
+- Same-process reloads use a tiny namespaced `Symbol.for` transport lane keyed by socket/pane/source. Replacement claims the lane; old queued writes/late disposers are ignored, admitted inflight work finishes before replacement clears/writes. Only two fixed server sources are used. This is not cross-process locking.
+- Cleanup is best effort on transport failure; native process-exit cleanup provides an additional boundary. No retry daemon, polling or hidden UI is installed.
+
+## Development and verification
+
+```sh
+bun run check             # unit tests, typecheck, bundle
+bun run test:integration  # separate isolated real Herdr gate
 ```
 
-## Development
+The integration gate requires the pinned Linux Herdr 0.9.1 binary (SHA-256 `2a02fed16beb651ef006e1d43f048f652ca4dc58ad053cd2d44450563d5c54b7`) at `/tmp/herdr-v0.9.1-research` and source at `/root/workspace/herdr`, or `HERDR_TEST_BIN` / `HERDR_TEST_SOURCE`. It skips with an explicit reason when absent. It uses temporary HOME/XDG/session directories, an inert compiled `letta` fixture, native hook calls, and cold server restart—no credentials, provider calls or real user sessions. `gcc` is required.
 
-```bash
-bun install
-bun test
-bun run typecheck
-bun run build
-```
+The gate covers both startup orders, native semantic transitions, TTL expiry without state/name mutation, scope changes, rename/override, foreign metadata preservation, ignored guard/error readback, reload cleanup, and native named/default restore command dispatch. Unit tests cover malformed envelopes, bounded IPC, inflight generations and cache-busted module reload. Authenticated resume, every permission/question UI and Windows IPC are not certified.
 
-Or run the full local check:
+The separate [production-App fixture](integration/APP_ACCEPTANCE.md) loads the actual built companion in Letta's Ink App with a fake backend and recording socket. It exercises cancellation, new/resume/reload and next-event rename while asserting metadata-only traffic. This is distinct from the real Herdr gate, not authenticated provider acceptance.
 
-```bash
-bun run check
-```
+Historical [research](docs/research/native-integration/REPORT.md) and its probes describe the **old v0.2.1 baseline**. They are preserved as evidence, not current runnable product gates; some import the now-removed semantic reporter or require an external production App fixture. Use `bun run test`, not unrestricted discovery of archived probes.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-## Limitations
-
-- Letta Code's current mod API does not expose a precise `permission prompt opened` / `permission prompt resolved` event. By default this mod avoids over-reporting `blocked`; during approval waits, Herdr may show `working` until the tool starts, the approval resolves, or the turn continues.
-- `turn_start` and `turn_end` registration requires the host to expose `letta.capabilities.events.turns`. Modern Letta Code builds do; older or unusual hosts may fall back to LLM/tool events plus the stale-working safety timer.
-- `turn_end` is the preferred completion signal. The stale-working fallback is intentionally conservative so ordinary long-running model turns do not flicker to idle.
-- Tool watchdog behavior is opt-in. Long-running tools are common, so a watchdog is risky as a default lifecycle boundary.

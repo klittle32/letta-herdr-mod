@@ -4,10 +4,11 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Letta Code mod that reports semantic agent state to Herdr.",
+  "description": "Metadata-only Letta Code companion to native Herdr integration.",
   "scripts": {
-    "check": "bun test && bun run typecheck && bun run build",
-    "test": "bun test",
+    "check": "bun run test && bun run typecheck && bun run build",
+    "test": "bun test ./test",
+    "test:integration": "bun test ./integration/herdr.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "bun build src/index.ts --target=node --format=esm --outfile=dist/letta-herdr-mod.mjs",
     "install:local": "bun run build && mkdir -p ~/.letta/mods && cp dist/letta-herdr-mod.mjs ~/.letta/mods/letta-herdr-mod.mjs"
