@@ -1,0 +1,17 @@
+{
+  "verifiedAt": "2026-09-18T22:46:37.075Z",
+  "rawEvidence": "/tmp/herdr-issue4-runtime-results.json",
+  "checks": [
+    "Native fixture publishes working",
+    "Native fixture publishes blocked",
+    "Native fixture publishes idle",
+    "Native-first rejects mod state and hides guarded name",
+    "Metadata-only name visible with native identity intact",
+    "Mod-first stays working despite later idle report after native identity",
+    "Release preserves native identity; clear deletes it",
+    "Server rejection is falsely reported as client/reporter success",
+    "Native same-process identity replacements ignored",
+    "Summary token deleted despite presentation source guard",
+    "Isolated server cleanup completed"
+  ]
+}

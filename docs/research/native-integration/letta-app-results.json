@@ -1,0 +1,193 @@
+{
+  "timestamp": "2026-09-18T22:41:54.183Z",
+  "sourceCommit": "6db64e8f533e9c13d81536410460b83ef06e3bc4",
+  "transitions": [
+    {
+      "phase": "startup",
+      "executorCalls": 0,
+      "addedEvents": [
+        {
+          "name": "conversation_open",
+          "conversationId": "conv-fake-headless-1",
+          "reason": "startup",
+          "agent": {
+            "id": "agent-contract-probe",
+            "name": "Fake Headless Agent"
+          },
+          "sessionId": "conv-fake-headless-1"
+        }
+      ],
+      "addedHooks": [
+        {
+          "event_type": "SessionStart",
+          "working_directory": "/tmp/letta-code-test-home-ffoyIc",
+          "is_new_session": false,
+          "agent_id": "agent-contract-probe",
+          "agent_name": "Fake Headless Agent",
+          "conversation_id": "conv-fake-headless-1"
+        }
+      ],
+      "totalHooks": 1
+    },
+    {
+      "phase": "normal",
+      "executorCalls": 1,
+      "addedEvents": [
+        {
+          "name": "turn_start",
+          "conversationId": "conv-fake-headless-1",
+          "agent": {
+            "id": "agent-contract-probe",
+            "name": "Fake Headless Agent"
+          },
+          "sessionId": "conv-fake-headless-1"
+        },
+        {
+          "name": "turn_end",
+          "conversationId": "conv-fake-headless-1",
+          "stopReason": "end_turn",
+          "agent": {
+            "id": "agent-contract-probe",
+            "name": "Fake Headless Agent"
+          },
+          "sessionId": "conv-fake-headless-1"
+        }
+      ],
+      "addedHooks": [],
+      "totalHooks": 1
+    },
+    {
+      "phase": "cancel",
+      "executorCalls": 2,
+      "addedEvents": [
+        {
+          "name": "turn_start",
+          "conversationId": "conv-fake-headless-1",
+          "agent": {
+            "id": "agent-contract-probe",
+            "name": "Fake Headless Agent"
+          },
+          "sessionId": "conv-fake-headless-1"
+        }
+      ],
+      "addedHooks": [],
+      "totalHooks": 1
+    },
+    {
+      "phase": "new",
+      "executorCalls": 2,
+      "addedEvents": [
+        {
+          "name": "conversation_close",
+          "conversationId": "conv-fake-headless-1",
+          "reason": "new",
+          "agent": {
+            "id": "agent-contract-probe",
+            "name": "Fake Headless Agent"
+          },
+          "sessionId": "conv-fake-headless-1"
+        },
+        {
+          "name": "conversation_open",
+          "conversationId": "conv-fake-headless-2",
+          "reason": "new",
+          "agent": {
+            "id": "agent-contract-probe",
+            "name": "Fake Headless Agent"
+          },
+          "sessionId": "conv-fake-headless-1"
+        }
+      ],
+      "addedHooks": [
+        {
+          "event_type": "SessionStart",
+          "working_directory": "/tmp/letta-code-test-home-ffoyIc",
+          "is_new_session": true,
+          "agent_id": "agent-contract-probe",
+          "agent_name": "Fake Headless Agent",
+          "conversation_id": "conv-fake-headless-2"
+        }
+      ],
+      "totalHooks": 2
+    },
+    {
+      "phase": "resume",
+      "executorCalls": 2,
+      "addedEvents": [],
+      "addedHooks": [],
+      "totalHooks": 2
+    },
+    {
+      "phase": "reload",
+      "executorCalls": 2,
+      "addedEvents": [
+        {
+          "name": "conversation_close",
+          "conversationId": "conv-fake-headless-1",
+          "reason": "reload",
+          "agent": {
+            "id": "agent-contract-probe",
+            "name": "Fake Headless Agent"
+          },
+          "sessionId": "conv-fake-headless-1"
+        },
+        {
+          "name": "conversation_open",
+          "conversationId": "conv-fake-headless-1",
+          "reason": "reload",
+          "agent": {
+            "id": "agent-contract-probe",
+            "name": "Fake Headless Agent"
+          },
+          "sessionId": "conv-fake-headless-1"
+        }
+      ],
+      "addedHooks": [],
+      "totalHooks": 2
+    },
+    {
+      "phase": "rename",
+      "executorCalls": 2,
+      "addedEvents": [],
+      "addedHooks": [],
+      "totalHooks": 2
+    },
+    {
+      "phase": "after-rename",
+      "executorCalls": 3,
+      "addedEvents": [
+        {
+          "name": "turn_start",
+          "conversationId": "conv-fake-headless-1",
+          "agent": {
+            "id": "agent-contract-probe",
+            "name": "Contract Renamed"
+          },
+          "sessionId": "conv-fake-headless-1"
+        },
+        {
+          "name": "turn_end",
+          "conversationId": "conv-fake-headless-1",
+          "stopReason": "end_turn",
+          "agent": {
+            "id": "agent-contract-probe",
+            "name": "Contract Renamed"
+          },
+          "sessionId": "conv-fake-headless-1"
+        }
+      ],
+      "addedHooks": [],
+      "totalHooks": 2
+    }
+  ],
+  "blockedFetchAttempts": [
+    "https://api.letta.com/v1/metadata/balance",
+    "https://api.letta.com/v1/agents/agent-contract-probe/repositories",
+    "https://api.letta.com/v1/agents/agent-contract-probe/repositories",
+    "https://api.letta.com/v1/agents/agent-contract-probe/repositories",
+    "https://api.letta.com/v1/agents/agent-contract-probe/repositories",
+    "https://api.letta.com/v1/agents/agent-contract-probe/repositories",
+    "https://api.letta.com/v1/agents/agent-contract-probe/repositories",
+    "https://api.letta.com/v1/agents/agent-contract-probe/repositories"
+  ]
+}
