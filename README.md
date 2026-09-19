@@ -46,7 +46,7 @@ If choosing an in-place migration, an operator must identify and safely release 
 
 Before declaring migration complete, verify native named/default session identity, real working/idle/blocked transitions, agent display name, and owned-metadata cleanup on close/reload. Use `/herdr-status` and `herdr pane get "$HERDR_PANE_ID"`. A successful metadata acknowledgement alone is insufficient.
 
-The intended next release is `v0.3.0` (subject to current tags); the stale package version is deliberately unchanged pending separate release approval.
+Version **v0.3.0** introduces this metadata-only scope as a breaking pre-1.0 release. It does not imply that the experimental native integration has reached a stable 1.0 contract.
 
 ## Configuration
 
